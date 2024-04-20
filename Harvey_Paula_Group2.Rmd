@@ -1,0 +1,503 @@
+---
+title: "Knowledge Discovery and Data Visualization Take-home Exam"
+author: "Harvey Nguyen"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load necessary library 
+
+```{r warning=FALSE}
+library(ggplot2)
+library(scales)
+library(corrplot)
+library(C50)
+library(caret)
+library(dplyr)
+```
+
+## Load the dataset and generate a random subset
+
+```{r}
+set.seed(2023)
+
+deposit <- read.csv("C:/Users/ichli/OneDrive/Documents/Bsc_Business_Analytics/Y1/EBC1045_KDDV/Final_Exam/BankDeposit.csv", stringsAsFactors = TRUE)
+my_data <- deposit[sample(nrow(deposit), size = 5000),]
+
+head(my_data, 3)
+```
+
+## Check for missing value 
+
+```{r}
+which( is.na( my_data ) )
+```
+
+####### As you can see, there are no missing values in this dataset.
+
+## Identify outliers - IQR Method
+
+####### Because the presence of -1 in pdays indicates that the client was not previously contacted, and 0 in previous indicates there is no contacts performed before this campaign and for this client, I have decided to remove all -1 and 0 values before finding outliers to avoid incorrect results. Based on this result, you can see the range of outliers in each variables.
+
+```{r}
+find_outliers <- function(x, name) {
+  if(is.numeric(x)) {
+    if(name == "pdays") {
+      x <- x[x != -1]
+    }
+    if(name == "previous") {
+      x <- x[x != 0]
+    }
+
+    Q1 <- quantile(x, 0.25, na.rm = TRUE)
+    Q3 <- quantile(x, 0.75, na.rm = TRUE)
+    IQR <- Q3 - Q1
+    lower.bound <- Q1 - 1.5 * IQR
+    upper.bound <- Q3 + 1.5 * IQR
+    outliers <- x[x < lower.bound | x > upper.bound]
+    return(outliers)
+  } else {
+    return(NA)
+  }
+}
+
+numeric_columns <- sapply(my_data, is.numeric)
+
+outliers_list <- mapply(FUN = find_outliers, 
+                        x = my_data[, numeric_columns, drop = FALSE], 
+                        name = names(my_data)[numeric_columns],
+                        SIMPLIFY = FALSE)
+
+print_outlier_ranges <- function(outliers_list, data) {
+  for (variable_name in names(outliers_list)) {
+    outliers <- outliers_list[[variable_name]]
+    if (length(outliers) > 0 && !is.na(outliers[1])) {
+      data_subset <- data[[variable_name]]
+      if(variable_name == "pdays") {
+        data_subset <- data_subset[data_subset != -1]
+      }
+      if(variable_name == "previous") {
+        data_subset <- data_subset[data_subset != 0]
+      }
+      Q1 <- quantile(data_subset, 0.25, na.rm = TRUE)
+      Q3 <- quantile(data_subset, 0.75, na.rm = TRUE)
+      IQR <- Q3 - Q1
+      lower.bound <- Q1 - 1.5 * IQR
+      upper.bound <- Q3 + 1.5 * IQR
+      
+      lower.outliers <- outliers[outliers < lower.bound]
+      upper.outliers <- outliers[outliers > upper.bound]
+      
+      if (length(lower.outliers) > 0) {
+        cat(variable_name, "lower outliers range:", min(lower.outliers), "to", lower.bound, "\n")
+      }
+      if (length(upper.outliers) > 0) {
+        cat(variable_name, "upper outliers range:", upper.bound, "to", max(upper.outliers), "\n")
+      }
+    } else {
+      cat(variable_name, "has no outliers or non-numeric data.\n")
+    }
+  }
+}
+
+print_outlier_ranges(outliers_list, my_data)
+```
+
+## Visualize outliers
+
+####### To visualize outliers, I generate boxplot for each variables, with each red dot means there is a outlier.
+
+```{r warning=FALSE}
+plot_box_plots <- function(data) {
+  numeric_columns <- sapply(data, is.numeric) & names(data) != "day"
+  numeric_data <- data[numeric_columns]
+  
+  for (variable_name in names(numeric_data)) {
+    if (variable_name == "pdays") {
+      data_subset <- data[data[[variable_name]] != -1, variable_name, drop = FALSE]
+    } else if (variable_name == "previous") {
+      data_subset <- data[data[[variable_name]] != 0, variable_name, drop = FALSE]
+    } else {
+      data_subset <- data[, variable_name, drop = FALSE]
+    }
+    
+    p <- ggplot(data_subset, aes_string(y = variable_name)) +
+      geom_boxplot(outlier.colour = "red", outlier.shape = 1) +
+      labs(title = paste("Box plot for", variable_name)) +
+      theme_minimal() +
+      theme(axis.title.x = element_blank(), 
+            axis.text.x = element_blank(),   
+            axis.ticks.x = element_blank(),  
+            axis.text.y = element_text(angle = 90, vjust = 0.5))  
+    print(p)
+  }
+}
+
+plot_box_plots(my_data)
+```
+
+## Correlation analysis for numerical variables
+
+```{r}
+numerical_data <- my_data[sapply(my_data, is.numeric)]
+correlation_matrix <- cor(numerical_data, use = "complete.obs")  
+print(correlation_matrix)
+corrplot(correlation_matrix, method = "circle")
+```
+
+####### As you can see from the correlation result, only the relationship between *pdays* and *previous* is significant (0.5562>0.5>>other). This means we could say that the number of days since the last contact increases, the number of contacts made before the current campaign also tends to be higher. The presence of the value -1 in *pdays*, which signifies that the client was not previously contacted, warrants special attention, as it could significantly influence the observed correlation and possibly lead to skewed results.
+
+## Visualze the result from correlation 
+
+```{r}
+ggplot(my_data, aes(x = pdays, y = previous)) +
+  geom_point() +
+  theme_minimal() +
+  labs(x = "Pdays", y = "Previous", title = "Scatter Plot between Pdays and Previous")
+```
+
+## Frequency table for categorical variables
+
+```{r}
+categorical_data <- my_data[sapply(my_data, is.factor) | sapply(my_data, is.character)]
+frequency_tables <- lapply(categorical_data, table)
+print(frequency_tables)
+```
+
+## Visualize frequency table for categorical variables
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( job ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Job", guide = guide_axis(n.dodge = 2) ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( marital ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Marital" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( education ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Education" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( default ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Default" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( housing ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Housing" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( loan ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Loan" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( contact ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Contact" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+my_data$month <- factor(my_data$month, levels = c("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))
+
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( month ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Month" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+```{r}
+ggplot() + 
+  geom_bar( data = my_data,
+            aes( x = factor( poutcome ),
+                 fill = factor( y ) ), 
+            position = "fill" ) +
+  scale_x_discrete( "Poutcome" ) + 
+  scale_y_continuous( "Percent" ) + 
+  guides( fill = guide_legend( title = "Yes/No" ) ) + 
+  scale_fill_manual( values = c( "#006666", "#62b366" ) )
+```
+
+######## As you can see from the frequency table, in our database with 5000 observations we have:
+######## - The job categories with the highest frequencies are management, blue-collar, and technician. 
+######## - The majority of individuals are married, followed by single and divorced.
+######## - A large number of individuals have secondary education, followed by tertiary and primary.
+######## - Very few individuals have defaulted on their credit
+######## - The majority of individuals do not have a personal loan and have not subscribed 
+######## - Most contacts were made via cellular phones, with a small proportion by telephone and a notable number of contacts are listed as unknown
+######## - A large number of individuals have secondary education, followed by tertiary and primary.
+######## - The frequency of contact varies by month, with May having the highest frequency
+
+##  Create training and test dataset.
+
+######## This code will take 80% of the *my_data* to the *trainData* to work with and 20% other to the *testData* to check our prediction.
+
+```{r}
+trainIndex <- sample(1:nrow(my_data), 0.8 * nrow(my_data))
+trainData <-  my_data[trainIndex, ]
+testData <- my_data[-trainIndex, ]
+head(trainData, 3)
+```
+
+## Validating the Partitioning
+
+######## To check that there are no differences between the same variable in *trainData* and *testData*,  I use Two-sample T-test to calculate the p-value to generate the conclusion.
+
+```{r}
+age_t <- t.test(trainData$age, testData$age)
+print(age_t)
+```
+
+```{r}
+duration_t <- t.test(trainData$duration, testData$duration)
+print(duration_t)
+```
+
+```{r}
+trainData$y_num <- ifelse(trainData$y == "yes", 1, 0)
+testData$y_num <- ifelse(testData$y == "yes", 1, 0)
+
+y_t <- t.test(trainData$y_num, testData$y_num)
+print(y_t)
+```
+
+######## As you can see from the result, p-value in all case is bigger than 0.05. So there's no significant difference in the distribution between the *trainData* and *testData*, suggesting that the partitions are consistent with respect to these variables.
+
+## Setting up before apply data mining methods.
+
+```{r}
+trainData$default_num <- ifelse(trainData$default == "yes", 1, 0)
+testData$default_num <- ifelse(testData$default == "yes", 1, 0)
+
+trainData$housing_num <- ifelse(trainData$housing == "yes", 1, 0)
+testData$housing_num <- ifelse(testData$housing == "yes", 1, 0)
+
+trainData$loan_num <- ifelse(trainData$loan == "yes", 1, 0)
+testData$loan_num <- ifelse(testData$loan == "yes", 1, 0)
+
+trainData$month_num <- match(tolower(trainData$month), tolower(month.abb))
+testData$month_num <- match(tolower(testData$month), tolower(month.abb))
+
+```
+
+## Normalize data (Min-Max Normalization)
+
+```{r}
+normalize <- function(x){
+  rng <- range(x,na.rm = TRUE)
+  (x - rng[1]) / (rng[2] - rng[1])
+}
+
+trainData <- trainData %>% mutate(
+  age.MM = normalize(age),
+  balance.MM = normalize(balance),
+  duration.MM = normalize(duration),
+  campaign.MM = normalize(campaign),
+  pdays.MM = normalize(pdays),
+  previous.MM = normalize(previous)
+)
+
+testData <- testData %>% mutate(
+  age.MM = normalize(age),
+  balance.MM = normalize(balance),
+  duration.MM = normalize(duration),
+  campaign.MM = normalize(campaign),
+  pdays.MM = normalize(pdays),
+  previous.MM = normalize(previous)
+)
+```
+
+## Linear Regression
+
+```{r}
+trainData$y_num <- as.numeric(as.character(trainData$y_num))
+
+model <- lm(y_num ~ age.MM + default_num + balance.MM + housing_num + loan_num + day + month_num + duration.MM + campaign.MM + pdays.MM + previous, trainData)
+summary(model)
+```
+
+######## We could see there are some variables that still have the p-value bigger than 0.05. So I remove them and run the linear regression again. 
+
+```{r}
+model <- lm(y_num ~ housing_num + loan_num + duration.MM + campaign.MM + pdays.MM + previous, trainData)
+summary(model)
+```
+
+######## Apply to the *testData*
+
+```{r}
+predictions_lr <- predict(model, newdata = testData)
+residuals_lr <- testData$y_num - predictions_lr
+rmse_lr <- sqrt(mean(residuals_lr^2, na.rm = TRUE))
+print(rmse_lr)
+```
+
+######## After running the linear regression, we could see that the R^2 is not really high - just around 0.3, and the Root-mean-square-error is 0.4. Which means only 30% of these observations can be explained by this system and on average, the model's predictions are 0.4 units away from the actual data points, which is very high when the target variable is only 0 or 1. So I decided to change to another method for data mining.
+
+## C5.0 Decision Tree
+
+######## Same with the previous method. For C5.0 Decision Tree I also start with all variables, which gives us the result below. 
+
+```{r}
+predictors <- trainData[,c(23,2,3,4,5,24,7,8,9,10,11,25,26,27,28,16)]
+dependence <- trainData$y
+
+c50fit <- C5.0(x = predictors, y = dependence)  
+c50fit
+summary(c50fit)
+```
+
+######## Because of the complicated system, so I decided to remove variables which have less than 10% in the Attribute Usage. Then I got result below. 
+
+```{r}
+predictors <- trainData[,c(23,7,8,9,10,11,25,28,16)]
+dependence <- trainData$y
+
+c50fit <- C5.0(x = predictors, y = dependence)  
+c50fit
+summary(c50fit)
+```
+
+######## Now we apply this method to our *testData* to check the accuracy. 
+
+```{r}
+predictions <- predict(c50fit, newdata = testData)
+
+y_true <- testData$y
+
+y_true <- factor(y_true, levels = levels(predictions))
+
+confusion_matrix <- confusionMatrix(predictions, y_true)
+
+print(confusion_matrix)
+
+```
+
+######## The accuracy for the C5.0 Decision Tree is 0.824. If we compare to our Linear Regression method, we can see this one is better than the previous one (When the RMSE of Linear Regression is less than a half, 0.4). And the p-value in this method is less than 2.2e-16 (Less than 0.05), so we can conclude that the model is significant.
+
+## k-Nearest Neighbor Predictions
+
+######## Another method presented below is the knn method. There is no specific reason why I choose k = 5. There is no one-size-fits-all answer for the best k value, however in my opinion, 5 is not really small but not also really big so normally I will take that number. 
+
+######## Same with two previous methods, I also put all variables into the model, and then apply it to the *testData* and check for the accuracy.  
+
+```{r}
+k <- 5
+knn_model <- train(y ~ age.MM + job + marital + education + default + balance.MM + housing + loan + contact + day + month + duration.MM + campaign.MM + pdays.MM + previous.MM + poutcome, data = trainData, method = "knn", trControl = trainControl(method = "none"), tuneGrid = expand.grid(k = k))
+
+print(knn_model)
+
+predictions <- predict(knn_model, newdata = testData)
+
+confusionMatrix(predictions, testData$y)
+```
+
+######## As you can see from the confusion matrix, the accuracy of the knn method is 0.752. That's mean 72% of the model's predictions were correct.
+
+## Comparision between models
+
+######## After developing three distinct models — Linear Regression, C5.0 Decision Tree, and kNN — We observe that each model consistently exhibits p-values close to zero, indicating statistically significant predictors. Among these, the C5.0 Decision Tree model stands out with the highest accuracy, successfully predicting the correct outcome in 82.4% of cases. For the kNN model, accuracy could potentially be enhanced by optimizing the choice of k, which entails selecting the most appropriate number of neighbors — a task that can be challenging yet rewarding. The lower performance of the Linear Regression model could be attributed to the prevalence of categorical variables within the dataset, which, despite being encoded as binary values, may not lend themselves well to the assumptions of linear regression, thereby yielding lower accuracy.
+
+## Conclusion
+
+######## In this analysis, we carefully selected and analyzed a subset of 5,000 observations. After an initial exploration and uncovering significant relationships between various variables, we divided the data into two distinct sets: trainData for model training and testData for evaluation. We applied three different predictive models — Linear Regression, C5.0 Decision Tree, and kNN — to our analysis. Our comprehensive evaluation led us to conclude that the C5.0 Decision Tree model outperforms the others in predicting whether a client will subscribe to the bank’s term deposit. The effectiveness of the C5.0 Decision Tree in this context underscores its potential as a powerful tool in the realm of data-driven financial analytics.
+
+## Declaration of Originality: Take Home Exam
+
+
+By signing this statement, I hereby acknowledge the submitted Exam 
+
+Course code: EBC1045  
+
+Course name: Knowledge Discovery and Data Visualization
+
+to be produced independently by me.
+ 
+By signing this statement, I explicitly declare that I am aware of the fraud sanctions as stated in the Education and Examination Regulations (EERs) of SBE, Maastricht University. 
+
+
+
+Place: Maastricht, Netherlands. 
+
+
+
+Date: 12/21/2023. 
+
+
+
+First and last name: Harvey Nguyen. 
+
+
+
+Study programme: Business Analytics. 
+
+
+
+ID number: i6360050. 
+
+
+
+Passport/ Id card number: P00323926 
+
